@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📱 數據採集器 - Google Drive 上傳版 (單檔整合)</title>
+
+        <script src="https://cdn.jsdelivr.net/npm/jsqr@1.0.4/dist/jsQR.min.js"></script>
+
+        <style>
+        /* 基礎樣式，適合手機觸控 */
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 15px; 
+            background-color: #2c3855; 
+            color: #e6e6e6; 
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+        }
+        h2 { 
+            border-bottom: 2px solid #4a5d85; 
+            padding-bottom: 5px; 
+            color: #ffc107; 
+        }
+
+        /* 影像區塊 */
+        #video-stream { 
+            width: 100%; 
+            border: 3px solid #007bff; 
+            border-radius: 8px; 
+            display: block; 
+            margin-bottom: 15px;
+            transition: opacity 0.1s; /* 添加過渡效果 */
+        }
+        /* 畫布用於背景處理，故隱藏 */
+        #scan-canvas, #photo-canvas { 
+            display: none; 
+        } 
+
+        /* 按鈕風格 */
+        button { 
+            padding: 12px; 
+            margin-top: 10px; 
+            width: 100%; 
+            border: none; 
+            border-radius: 5px; 
+            font-weight: bold; 
+            transition: background-color 0.3s;
+            cursor: pointer;
+        }
+        #start-btn { 
+            background-color: #17a2b8; 
+            color: white; 
+        }
+        #capture-btn { 
+            background-color: #28a745; 
+            color: white; 
+        }
+        #output-btn { 
+            background-color: #007bff; 
+            color: white; 
+        } 
+        button:disabled { 
+            background-color: #495057 !important; 
+            color: #a9b5c7 !important; 
+            cursor: not-allowed; 
+        }
+
+        /* 資訊顯示 */
+        #status-message { 
+            padding: 10px; 
+            background-color: #3d4a6a; 
+            border-radius: 4px; 
+            margin-bottom: 15px; 
+            font-size: 0.9em; 
+        }
+        #order-display { 
+            padding: 10px; 
+            background-color: #556891; 
+            border-radius: 4px; 
+            margin-bottom: 15px; 
+            min-height: 40px; 
+        }
+        #photo-preview { 
+            margin-top: 15px; 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 8px; 
+            border: 1px dashed #a9b5c7; 
+            padding: 10px; 
+            border-radius: 6px; 
+            min-height: 60px;
+        }
+        #photo-preview img { 
+            width: 60px; 
+            height: 45px; 
+            object-fit: cover; 
+            border: 2px solid #ffc107; 
+            border-radius: 4px; 
+        }
+
+        /* 輸出結果區 */
+        #output-area { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background-color: #3d4a6a; 
+            border-radius: 8px; 
+            display: none; 
+        }
+        #json-output { 
+            width: 100%; 
+            height: 150px; 
+            border: 1px solid #556891; 
+            background-color: #2c3855; 
+            color: #e6e6e6; 
+            padding: 10px; 
+            box-sizing: border-box; 
+            resize: none;
+        }
+        #copy-btn { 
+            margin-top: 10px; 
+            background-color: #dc3545; 
+            color: white; 
+        }
+        #upload-status-message { 
+            margin-top: 15px; 
+            padding: 8px; 
+            border: 1px solid #ffc107; 
+            border-radius: 4px; 
+            font-weight: bold; 
+            background-color: #556891;
+        }
+	</style>
+	</head>
+<body>
+    <div class="container">
+        <h2>📱 手機採集端 (Google Drive 連線)</h2>
+        <p id="status-message">請點擊 **[啟動相機]**，讓手機鏡頭準備掃描。</p>
+        
+        <button id="start-btn" onclick="startProcess()">▶ 啟動相機</button>
+
+        <h3>1. 訂單資訊 (QR Code 掃描)</h3>
+        <div id="order-display">等待掃描 QR Code...</div>
+        
+        <h3>2. 影像證據採集</h3>
+        <video id="video-stream" autoplay playsinline></video>
+        <canvas id="scan-canvas"></canvas>
+        <canvas id="photo-canvas"></canvas>
+
+        <button id="capture-btn" disabled onclick="capturePhoto()">📸 拍攝照片 (0)</button>
+        
+        <h4>已拍攝預覽:</h4>
+        <div id="photo-preview"></div>
+        
+        <button id="output-btn" disabled onclick="outputData()">💾 上傳數據包至 Google Drive</button>
+
+        <div id="output-area">
+            <h4>上傳狀態與數據備份：</h4>
+            <p id="upload-status-message">點擊上傳按鈕後將嘗試連線 Apps Script...</p>
+            <textarea id="json-output" readonly></textarea>
+            <button id="copy-btn" onclick="copyToClipboard()">📋 一鍵複製 JSON (手動備用)</button>
+        </div>
+    </div>
+
+	    <script>
+        // --- 變數定義 ---
+        const video = document.getElementById('video-stream');
+        const scanCanvas = document.getElementById('scan-canvas');
+        const photoCanvas = document.getElementById('photo-canvas');
+        const startBtn = document.getElementById('start-btn');
+        const captureBtn = document.getElementById('capture-btn');
+        const outputBtn = document.getElementById('output-btn');
+        const orderDisplay = document.getElementById('order-display');
+        const statusMessage = document.getElementById('status-message');
+        const photoPreview = document.getElementById('photo-preview');
+        const jsonOutput = document.getElementById('json-output');
+        const outputArea = document.getElementById('output-area');
+        const uploadStatusMessage = document.getElementById('upload-status-message'); 
+
+        let stream = null;
+        let scanning = false;
+        let scannedData = null; // 儲存當前掃描到的 QR Code 內容
+        let photoEvidence = []; // 儲存 Base64 影像陣列
+
+        // 🎯 您的 Apps Script Web App URL (已配置)
+        const UPLOAD_URL = 'https://script.google.com/macros/s/AKfycbwt2t_dvs6vzzHzPEcMu-kBklfKnVRJBL6ulPaS-hpuxdK01j7N-BJ0_VU-ay2oXKbuzw/exec'; 
+
+        // --- A. 啟動/停止相機 ---
+        function startProcess() {
+            if (stream) { 
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                scanning = false;
+                startBtn.textContent = '▶ 啟動相機';
+                captureBtn.disabled = true;
+                outputArea.style.display = 'none';
+                statusMessage.textContent = '相機已停止。';
+                return;
+            }
+
+            statusMessage.textContent = '載入中... 請允許相機權限。';
+            
+            // 使用後鏡頭 ("environment")
+            navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" }, 
+                audio: false 
+            })
+            .then(function(s) {
+                stream = s;
+                video.srcObject = stream;
+                video.onloadedmetadata = function() {
+                    video.play();
+                    scanning = true;
+                    startBtn.textContent = '◼ 停止相機';
+                    statusMessage.textContent = '✅ 相機已啟動。請將 QR Code 置於鏡頭前。';
+                    requestAnimationFrame(tick); // 開始掃描循環
+                };
+            })
+            .catch(function(err) {
+                statusMessage.innerHTML = `<span style="color:#dc3545;">❌ 無法啟動鏡頭: ${err.name} - 請檢查權限。</span>`;
+            });
+        }
+
+        // --- B. 連續掃描 QR Code ---
+        function tick() {
+            if (!scanning || video.readyState !== 4) { // readyState === 4 表示影片已載入完畢
+                requestAnimationFrame(tick);
+                return;
+            }
+
+            scanCanvas.width = video.videoWidth;
+            scanCanvas.height = video.videoHeight;
+            const ctx = scanCanvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+            
+            const imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code) {
+                if (code.data !== scannedData) {
+                    scannedData = code.data; 
+                    handleScanSuccess(scannedData);
+                }
+            } else {
+                if (scannedData === null) {
+                    orderDisplay.innerHTML = '請將 QR Code 置於鏡頭前進行掃描...';
+                }
+            }
+
+            requestAnimationFrame(tick);
+        }
+
+        function handleScanSuccess(data) {
+            photoEvidence = []; // 掃描新單號，清空舊照片
+            photoPreview.innerHTML = '';
+            
+            const details = data.split('|');
+            const orderId = details[0];
+
+            orderDisplay.innerHTML = `<strong>訂單編號:</strong> ${orderId}<br><strong>完整數據:</strong> ${data}`;
+            statusMessage.textContent = '✅ QR Code 掃描成功！請開始拍攝證據照片。';
+            
+            captureBtn.disabled = false;
+            captureBtn.textContent = '📸 拍攝照片 (0)';
+            outputBtn.disabled = true;
+            outputArea.style.display = 'none';
+            uploadStatusMessage.textContent = '點擊上傳按鈕後將嘗試連線 Apps Script...';
+        }
+
+        // --- C. 影像擷取與 Base64 轉換 ---
+        function capturePhoto() {
+            if (scannedData === null || stream === null) { return; }
+            
+            photoCanvas.width = video.videoWidth;
+            photoCanvas.height = video.videoHeight;
+            const context = photoCanvas.getContext('2d');
+            context.drawImage(video, 0, 0, photoCanvas.width, photoCanvas.height);
+            
+            // 將影像轉換為 Base64，使用較低品質 0.5 (可依需求調整 0.3~0.8)
+            const dataURL = photoCanvas.toDataURL('image/jpeg', 0.5); 
+            
+            photoEvidence.push(dataURL);
+            updatePhotoPreview(); 
+            
+            // 視覺回饋
+            video.style.opacity = '0.5';
+            setTimeout(() => { video.style.opacity = '1'; }, 100);
+            
+            outputBtn.disabled = !(scannedData && photoEvidence.length > 0);
+            outputArea.style.display = 'none'; // 拍新照時隱藏舊輸出
+        }
+
+        function updatePhotoPreview() {
+            photoPreview.innerHTML = photoEvidence.map((url, i) => 
+                `<img src="${url}" alt="證據照片 ${i+1}">`
+            ).join('');
+            captureBtn.textContent = `📸 拍攝照片 (${photoEvidence.length})`;
+        }
+
+        // --- D. 雲端上傳核心函式 (目標 Google Apps Script) ---
+        async function uploadData(jsonPayload) {
+            
+            uploadStatusMessage.innerHTML = '📤 正在嘗試上傳數據到 Google Drive...';
+            
+            try {
+                const response = await fetch(UPLOAD_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: jsonPayload
+                });
+
+                // 檢查 HTTP 狀態碼
+                if (response.status === 404) {
+                    throw new Error("404 Not Found. Apps Script URL 可能已失效或錯誤。");
+                }
+                if (response.status === 400) {
+                    throw new Error("400 Bad Request. 請求格式錯誤。");
+                }
+                
+                // 嘗試解析 Apps Script 回傳的內容
+                const result = await response.json();
+
+                if (result.success === true) {
+                    uploadStatusMessage.innerHTML = `<span style="color:#28a745;">✅ 上傳成功！照片和數據已存入 Google Drive。</span>`;
+                    
+                    // 上傳成功後，重置狀態，準備下一個單號
+                    scannedData = null;
+                    photoEvidence = [];
+                    updatePhotoPreview();
+                    outputBtn.disabled = true;
+                    orderDisplay.innerHTML = '等待掃描 QR Code...';
+
+                } else {
+                    // 處理 Apps Script 程式碼內部的錯誤
+                    uploadStatusMessage.innerHTML = `<span style="color:#dc3545;">❌ Apps Script 處理失敗：${result.error || '未知的 Apps Script 錯誤'}</span>`;
+                }
+
+            } catch (error) {
+                // 處理網路連線錯誤 (例如手機斷網或 URL 錯誤)
+                uploadStatusMessage.innerHTML = `<span style="color:#dc3545;">❌ 網路或連線錯誤：請檢查網路或 URL。 (${error.message})</span>`;
+                console.error('上傳錯誤:', error);
+            }
+        }
+
+        // --- E. 數據組裝與觸發上傳 ---
+        function outputData() {
+            if (scannedData === null || photoEvidence.length === 0) {
+                alert('請先掃描 QR Code 並拍攝照片。');
+                return;
+            }
+
+            const record = {
+                id: Date.now(),
+                orderId: scannedData.split('|')[0],
+                fullDetails: scannedData,
+                date: new Date().toLocaleString('zh-TW'),
+                photos: photoEvidence // Base64 數據
+            };
+
+            const outputArray = [record];
+            const jsonStringForUpload = JSON.stringify(outputArray); 
+            const jsonStringForDisplay = JSON.stringify(outputArray, null, 2); 
+
+            // 1. 顯示數據 (供手動備份)
+            jsonOutput.value = jsonStringForDisplay;
+            outputArea.style.display = 'block';
+
+            // 2. 執行雲端上傳
+            uploadData(jsonStringForUpload);
+        }
+
+        // --- F. 複製到剪貼簿 (手動備用) ---
+        function copyToClipboard() {
+            jsonOutput.select(); 
+            try {
+                navigator.clipboard.writeText(jsonOutput.value)
+                    .then(function() {
+                        alert('✅ JSON 數據已成功複製到剪貼簿！');
+                    })
+                    .catch(function(err) {
+                        // 如果 navigator.clipboard 失敗 (例如在某些不安全的環境)，使用舊方法
+                        document.execCommand('copy');
+                        alert('✅ JSON 數據已複製！(請手動檢查剪貼簿)');
+                    });
+            } catch (err) {
+                document.execCommand('copy');
+                alert('✅ JSON 數據已複製！(請手動檢查剪貼簿)');
+            }
+        }
+	</script>
+	</body>
+</html>
